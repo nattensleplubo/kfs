@@ -1,29 +1,80 @@
-kernel_source_files := $(shell find src/impl/kernel -name *.c)
-kernel_object_files := $(patsubst src/impl/kernel/%.c, build/kernel/%.o, $(kernel_source_files))
+# Docker settings
+DOCKER_IMAGE := randomdude/gcc-cross-x86_64-elf
+DOCKER_RUN := docker run --rm -v $(CURDIR):/root/env -w /root/env $(DOCKER_IMAGE)
 
-x86_64_c_source_files := $(shell find src/impl/x86_64 -name *.c)
-x86_64_c_object_files := $(patsubst src/impl/x86_64/%.c, build/x86_64/%.o, $(x86_64_c_source_files))
+# Directories
+SRC_DIR := src
+BUILD_DIR := build
+DIST_DIR := dist
+KERNEL_SRC := $(SRC_DIR)/impl/kernel
+X86_64_SRC := $(SRC_DIR)/impl/x86_64
+ISO_DIR := targets/x86_64/iso
 
-x86_64_asm_source_files := $(shell find src/impl/x86_64 -name *.asm)
-x86_64_asm_object_files := $(patsubst src/impl/x86_64/%.asm, build/x86_64/%.o, $(x86_64_asm_source_files))
+# Flags
+CFLAGS := -c -fno-builtin -fno-stack-protector -fno-omit-frame-pointer -nostdlib -nodefaultlibs -g3 -I $(SRC_DIR)/intf -ffreestanding
+LDFLAGS := -n -T targets/x86_64/linker.ld
+ASMFLAGS := -f elf64
 
-x86_64_object_files := $(x86_64_c_object_files) $(x86_64_asm_object_files)
+# Source files
+KERNEL_SRCS := $(shell find $(KERNEL_SRC) -name *.c)
+X86_64_C_SRCS := $(shell find $(X86_64_SRC) -name *.c)
+X86_64_ASM_SRCS := $(shell find $(X86_64_SRC) -name *.asm)
 
-$(kernel_object_files): build/kernel/%.o : src/impl/kernel/%.c
-	mkdir -p $(dir $@) && \
-	x86_64-elf-gcc -c -I src/intf -ffreestanding $(patsubst build/kernel/%.o, src/impl/kernel/%.c, $@) -o $@
+# Object files
+KERNEL_OBJS := $(patsubst $(KERNEL_SRC)/%.c,$(BUILD_DIR)/kernel/%.o,$(KERNEL_SRCS))
+X86_64_C_OBJS := $(patsubst $(X86_64_SRC)/%.c,$(BUILD_DIR)/x86_64/%.o,$(X86_64_C_SRCS))
+X86_64_ASM_OBJS := $(patsubst $(X86_64_SRC)/%.asm,$(BUILD_DIR)/x86_64/%.o,$(X86_64_ASM_SRCS))
 
-$(x86_64_c_object_files): build/x86_64/%.o : src/impl/x86_64/%.c
-	mkdir -p $(dir $@) && \
-	x86_64-elf-gcc -c -I src/intf -ffreestanding $(patsubst build/x86_64/%.o, src/impl/x86_64/%.c, $@) -o $@
+# All object files
+ALL_OBJS := $(KERNEL_OBJS) $(X86_64_C_OBJS) $(X86_64_ASM_OBJS)
 
-$(x86_64_asm_object_files): build/x86_64/%.o : src/impl/x86_64/%.asm
-	mkdir -p $(dir $@) && \
-	nasm -f elf64 $(patsubst build/x86_64/%.o, src/impl/x86_64/%.asm, $@) -o $@
+# Final kernel binary and ISO
+KERNEL_BIN := $(DIST_DIR)/x86_64/kernel.bin
+KERNEL_ISO := $(DIST_DIR)/x86_64/kernel.iso
 
-.PHONY: build-x86_64
-build-x86_64: $(kernel_object_files) $(x86_64_object_files)
-	mkdir -p dist/x86_64 && \
-	x86_64-elf-ld -n -o dist/x86_64/kernel.bin -T targets/x86_64/linker.ld $(kernel_object_files) $(x86_64_object_files) && \
-	cp dist/x86_64/kernel.bin targets/x86_64/iso/boot/kernel.bin && \
-	grub-mkrescue /usr/lib/grub/i386-pc -o dist/x86_64/kernel.iso targets/x86_64/iso
+# Default target
+all: $(KERNEL_ISO)
+
+# Build everything inside Docker
+build-in-docker:
+	$(DOCKER_RUN) /bin/bash -c "\
+		apt-get update && \
+		apt-get install -y nasm xorriso grub-pc-bin grub-common && \
+		make build-kernel && \
+		make build-iso \
+	"
+
+# Build kernel
+build-kernel: $(ALL_OBJS)
+	mkdir -p $(dir $(KERNEL_BIN))
+	x86_64-elf-ld $(LDFLAGS) $(ALL_OBJS) -o $(KERNEL_BIN)
+
+# Build ISO
+build-iso: $(KERNEL_BIN)
+	mkdir -p $(ISO_DIR)/boot
+	cp $< $(ISO_DIR)/boot/kernel.bin
+	grub-mkrescue /usr/lib/grub/i386-pc -o $(KERNEL_ISO) $(ISO_DIR)
+
+# Rule for C files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/impl/%.c
+	mkdir -p $(@D)
+	x86_64-elf-gcc $(CFLAGS) $< -o $@
+
+# Rule for ASM files
+$(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC)/%.asm
+	mkdir -p $(@D)
+	nasm $(ASMFLAGS) $< -o $@
+
+# Clean up
+clean:
+	rm -rf $(BUILD_DIR) $(DIST_DIR)
+
+# Phony targets
+.PHONY: all build-in-docker build-kernel build-iso clean
+
+# Main target now uses Docker
+$(KERNEL_ISO): build-in-docker
+
+# Debug info
+print-%:
+	@echo $* = $($*)

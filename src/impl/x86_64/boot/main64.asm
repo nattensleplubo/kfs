@@ -3,6 +3,13 @@ extern kernel_main
 
 section .text
 bits 64
+global in_port
+
+in_port:
+	mov edx, [esp + 4] ; argument (port nbr) pushed to the edx register
+	in al, dx ; Read one byte in an io port at the specified address by the DX register and puts the result in the AL register
+	ret
+
 long_mode_start:
     ; load null into all data segment registers
     mov ax, 0

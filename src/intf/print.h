@@ -3,6 +3,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+// asm functions
+extern char in_port(unsigned short port);
+
+#define KEY_PRESSED 0x60
+#define KEY_STATUS 0x64
+
 enum {
     PRINT_COLOR_BLACK = 0,
 	PRINT_COLOR_BLUE = 1,
@@ -22,7 +28,13 @@ enum {
 	PRINT_COLOR_WHITE = 15,
 };
 
+// printing functions
 void print_clear();
 void print_char(char character);
 void print_str(char* string);
 void print_set_color(uint8_t foreground, uint8_t background);
+
+// libc dupes
+size_t	strlen(char *str);
+int strcmp(const char *s1, const char *s2);
+char *strcpy(char *dest, const char *src);
