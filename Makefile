@@ -1,80 +1,82 @@
-# Docker settings
-DOCKER_IMAGE := randomdude/gcc-cross-x86_64-elf
-DOCKER_RUN := docker run --rm -v $(CURDIR):/root/env -w /root/env $(DOCKER_IMAGE)
+NASM=nasm
+GCC=gcc
+LD=ld
+QEMU=qemu-system-i386
+
+# Compilation flags
+NASMFLAGS=-f elf32 -g -F dwarf
+GCCFLAGS=-m32 -c -fno-builtin -fno-stack-protector -fno-omit-frame-pointer -nostdlib -nodefaultlibs -g3
+LDFLAGS=-m elf_i386 -T src/linker.ld
 
 # Directories
-SRC_DIR := src
-BUILD_DIR := build
-DIST_DIR := dist
-KERNEL_SRC := $(SRC_DIR)/impl/kernel
-X86_64_SRC := $(SRC_DIR)/impl/x86_64
-ISO_DIR := targets/x86_64/iso
+SRC_DIR=src
+LOG_FILES_DIR=./qemudebuglogs
+ISO_PATH=scripts/kernhell.iso
 
-# Flags
-CFLAGS := -c -fno-builtin -fno-stack-protector -fno-omit-frame-pointer -nostdlib -nodefaultlibs -g3 -I $(SRC_DIR)/intf -ffreestanding
-LDFLAGS := -n -T targets/x86_64/linker.ld
-ASMFLAGS := -f elf64
+# Sources and Objects
+ASM_SOURCE=src/boot.asm \
 
-# Source files
-KERNEL_SRCS := $(shell find $(KERNEL_SRC) -name *.c)
-X86_64_C_SRCS := $(shell find $(X86_64_SRC) -name *.c)
-X86_64_ASM_SRCS := $(shell find $(X86_64_SRC) -name *.asm)
+C_SOURCES=src/kernel.c \
+					src/screen.c \
+					src/print_utils.c \
+					src/gdt.c \
+					src/shell_utils.c \
 
-# Object files
-KERNEL_OBJS := $(patsubst $(KERNEL_SRC)/%.c,$(BUILD_DIR)/kernel/%.o,$(KERNEL_SRCS))
-X86_64_C_OBJS := $(patsubst $(X86_64_SRC)/%.c,$(BUILD_DIR)/x86_64/%.o,$(X86_64_C_SRCS))
-X86_64_ASM_OBJS := $(patsubst $(X86_64_SRC)/%.asm,$(BUILD_DIR)/x86_64/%.o,$(X86_64_ASM_SRCS))
+ASM_OBJECT=$(ASM_SOURCE:.asm=.o)
+C_OBJECTS=$(C_SOURCES:.c=.o)
+KERNEL=kernel-100
 
-# All object files
-ALL_OBJS := $(KERNEL_OBJS) $(X86_64_C_OBJS) $(X86_64_ASM_OBJS)
+QEMU_LOG_FILE=$(shell date +'%Y%m%d_%H%M%S')_qemu_debug.log
 
-# Final kernel binary and ISO
-KERNEL_BIN := $(DIST_DIR)/x86_64/kernel.bin
-KERNEL_ISO := $(DIST_DIR)/x86_64/kernel.iso
+all: $(KERNEL)
 
-# Default target
-all: $(KERNEL_ISO)
+# Ensure logfiles directory exists
+$(LOG_FILES_DIR):
+	mkdir -p $(LOG_FILES_DIR)
 
-# Build everything inside Docker
-build-in-docker:
-	$(DOCKER_RUN) /bin/bash -c "\
-		apt-get update && \
-		apt-get install -y nasm xorriso grub-pc-bin grub-common && \
-		make build-kernel && \
-		make build-iso \
-	"
+# Assemble the ASM file into the object directory
+$(ASM_OBJECT): $(ASM_SOURCE) 
+	$(NASM) $(NASMFLAGS) $(ASM_SOURCE) -o $(ASM_OBJECT)
 
-# Build kernel
-build-kernel: $(ALL_OBJS)
-	mkdir -p $(dir $(KERNEL_BIN))
-	x86_64-elf-ld $(LDFLAGS) $(ALL_OBJS) -o $(KERNEL_BIN)
+# Compile each C source file into the directory
+%.o: %.c
+	$(GCC) $(GCCFLAGS) $< -o $@
 
-# Build ISO
-build-iso: $(KERNEL_BIN)
-	mkdir -p $(ISO_DIR)/boot
-	cp $< $(ISO_DIR)/boot/kernel.bin
-	grub-mkrescue /usr/lib/grub/i386-pc -o $(KERNEL_ISO) $(ISO_DIR)
+# Link the object files
+$(KERNEL): $(ASM_OBJECT) $(C_OBJECTS) $(LOG_FILES_DIR)
+	$(LD) $(LDFLAGS) -o $(KERNEL) $(ASM_OBJECT) $(C_OBJECTS)
+	cp ./$(KERNEL) ./scripts
+	docker compose -f docker-compose.yml up -d --build
 
-# Rule for C files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/impl/%.c
-	mkdir -p $(@D)
-	x86_64-elf-gcc $(CFLAGS) $< -o $@
-
-# Rule for ASM files
-$(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC)/%.asm
-	mkdir -p $(@D)
-	nasm $(ASMFLAGS) $< -o $@
-
-# Clean up
 clean:
-	rm -rf $(BUILD_DIR) $(DIST_DIR)
+	rm -f $(ASM_OBJECT) $(C_OBJECTS) $(KERNEL)
+	rm -f ./scripts/$(KERNEL)
+	rm -rf ./scripts/isodir/ 
+	rm -rf $(LOG_FILES_DIR)
+	docker compose -f docker-compose.yml down
 
-# Phony targets
-.PHONY: all build-in-docker build-kernel build-iso clean
+fclean: clean
+	rm -f ./scripts/kernhell.iso
+	docker system prune -af
 
-# Main target now uses Docker
-$(KERNEL_ISO): build-in-docker
+re: fclean all
 
-# Debug info
-print-%:
-	@echo $* = $($*)
+emulate: 
+	$(QEMU) -kernel $(KERNEL)
+
+boot:
+	$(QEMU) -cdrom $(ISO_PATH)
+
+log-emulate:
+	$(QEMU) -d int -D $(LOG_FILES_DIRECTORY)/$(QEMU_LOG_FILE) -kernel $(ISO_PATH)
+
+log-boot:
+	$(QEMU) -d int -D $(LOG_FILES_DIRECTORY)/$(QEMU_LOG_FILE) -no-reboot -cdrom $(KERNEL)
+
+debug-emulate:
+	$(QEMU) -s -S -d int -kernel $(KERNEL)
+
+debug-boot:
+	$(QEMU) -s -S -no-reboot -cdrom $(ISO_PATH)
+
+.PHONY: all clean fclean re emulate boot log-emulate log-boot debug-emulate debug-boot
