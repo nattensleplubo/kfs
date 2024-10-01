@@ -17,10 +17,6 @@ ISO_PATH=scripts/kernhell.iso
 ASM_SOURCE=src/boot.asm \
 
 C_SOURCES=src/kernel.c \
-					src/screen.c \
-					src/print_utils.c \
-					src/gdt.c \
-					src/shell_utils.c \
 
 ASM_OBJECT=$(ASM_SOURCE:.asm=.o)
 C_OBJECTS=$(C_SOURCES:.c=.o)
