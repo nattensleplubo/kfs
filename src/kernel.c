@@ -87,5 +87,5 @@ void terminal_init(void) {
 
 void kernel_main(void) {
     terminal_init();
-    terminal_putstr("Hello 42 World\n\n\n\n\n\n");
+    terminal_putstr("Hello 42 World");
 } 
