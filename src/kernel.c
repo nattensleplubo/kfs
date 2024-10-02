@@ -1,4 +1,4 @@
-#include "types.h"
+#include "kernel.h"
 
 enum vga_color {
 	VGA_COLOR_BLACK = 0,
@@ -19,14 +19,31 @@ enum vga_color {
 	VGA_COLOR_WHITE = 15,
 };
 
-static inline uint8_t vga_entry_color(enum vga_color fg, enum vga_color bg) 
-{
-	return fg | bg << 4;
+static const size_t VGA_WIDTH = 80;
+static const size_t VGA_HEIGHT = 25;
+
+size_t terminal_row;
+size_t terminal_col;
+uint8_t terminal_color;
+uint16_t *terminal_buffer;
+
+// ########## LIBC DUPES ##########
+
+void *memset(void *bufptr, int value, int size) {
+    unsigned char *buffer = (unsigned char *)bufptr;
+    for (int i = 0; i < size; i++) {
+        buffer[i] = (unsigned char)value;
+    }
+    return bufptr;
 }
 
-static inline uint16_t vga_entry(unsigned char uc, uint8_t color) 
-{
-	return (uint16_t) uc | (uint16_t) color << 8;
+unsigned char *memcpy(unsigned char *destptr, const unsigned char *srcptr, int size) {
+    unsigned char *dst = (unsigned char *)destptr;
+    const unsigned char *src = (const unsigned char*)srcptr;
+    for (int i = 0; i < size; i++) {
+        dst[i] = src[i];
+    }
+    return destptr;
 }
 
 size_t strlen(const char *str) {
@@ -36,13 +53,31 @@ size_t strlen(const char *str) {
     return len;
 }
 
-static const size_t VGA_WIDTH = 80;
-static const size_t VGA_HEIGHT = 25;
+int strcmp(const char *s1, const char *s2) {
+    while (*s1 && (*s1 == *s2)) {
+        s1++;
+        s2++;
+    }
+    return *(const unsigned char*)s1 - *(const unsigned char*)s2;
+}
 
-size_t terminal_row;
-size_t terminal_col;
-uint8_t terminal_color;
-uint16_t *terminal_buffer;
+char *strcpy(char *dest, const char *src) {
+    char *d = dest;
+    while ((*d++ = *src++));
+    return dest;
+}
+
+// ########## VGA FUNCTIONS ##########
+
+static inline uint8_t vga_entry_color(enum vga_color fg, enum vga_color bg) 
+{
+	return fg | bg << 4;
+}
+
+static inline uint16_t vga_entry(unsigned char uc, uint8_t color) 
+{
+	return (uint16_t) uc | (uint16_t) color << 8;
+}
 
 // ########## KERNEL PUTSTR FUNCTIONS ##########
 
@@ -56,11 +91,17 @@ void terminal_putentryat(char c, uint8_t color, size_t x, size_t y) {
 }
 
 void terminal_putchar(char c) {
-    terminal_putentryat(c, terminal_color, terminal_col, terminal_row);
-    if (++terminal_col == VGA_WIDTH) {
+    if (c == '\n') {
+        terminal_row++;
         terminal_col = 0;
-        if (++terminal_row == VGA_HEIGHT)
-            terminal_row = 0;
+    }
+    else {
+        terminal_putentryat(c, terminal_color, terminal_col, terminal_row);
+        if (++terminal_col == VGA_WIDTH) {
+            terminal_col = 0;
+            if (++terminal_row == VGA_HEIGHT)
+                terminal_row = 0;
+        }
     }
 }
 
@@ -69,13 +110,44 @@ void terminal_putstr(const char *str) {
     for (size_t i = 0; i < size; i++)
         terminal_putchar(str[i]);
 }
+// ########## KERNEL KEYBOARD FUNCTIONS ##########
+
+void terminal_kbdchar(char c) {
+    if (c == '\b') { //backspace
+        terminal_col--;
+        terminal_putchar(' ');
+        terminal_col--;
+    }
+    else if (c == '\n') { // enter
+        terminal_row++;
+        terminal_col = 0;
+    }
+    else {
+        terminal_putchar(c);
+    }
+}
+
+void keyboard_routine(void) {
+    unsigned char scancode;
+    char keycode;
+
+    scancode = in_port(KEY_STATUS);
+    if (scancode & 0x01) {
+        keycode = in_port(KEY_PRESSED);
+        if (keycode < 0)
+            return;
+        else {
+            terminal_kbdchar(keyboard_map[keycode]);
+        }
+    }
+}
 
 // ########## KERNEL MAIN FUNCTIONS ##########
 
 void terminal_init(void) {
     terminal_row = 0;
     terminal_col = 0;
-    terminal_color = vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+    terminal_color = vga_entry_color(VGA_COLOR_LIGHT_BLUE, VGA_COLOR_BLACK);
     terminal_buffer = (uint16_t*)0xB8000;
     for (size_t y = 0; y < VGA_HEIGHT; y++) {
         for (size_t x = 0; x < VGA_WIDTH; x++) {
@@ -87,5 +159,8 @@ void terminal_init(void) {
 
 void kernel_main(void) {
     terminal_init();
-    terminal_putstr("Hello 42 World");
+    terminal_putstr(" _   ___     \n| |_|  _|___ \n| '_|  _|_ -|\n|_,_|_| |___|\n             \n");
+    terminal_putstr("/// Welcome to NathouOs \\\\\\\n");
+    while (1)
+        keyboard_routine();
 } 

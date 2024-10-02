@@ -19,6 +19,14 @@ stack_top:
 
 section .text
 global _start:function (_start.end - _start)
+global in_port:function (in_port.end - in_port)
+
+in_port:
+    mov edx, [esp + 4]
+    in al, dx
+    ret
+.end:
+
 _start:
     mov esp, stack_top
     extern kernel_main
