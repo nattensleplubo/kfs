@@ -26,6 +26,9 @@ size_t terminal_row;
 size_t terminal_col;
 uint8_t terminal_color;
 uint16_t *terminal_buffer;
+unsigned int command_index;
+
+char command_buffer[MAX_COMMAND_LENGTH];
 
 // ########## LIBC DUPES ##########
 
@@ -112,17 +115,44 @@ void terminal_putstr(const char *str) {
 }
 // ########## KERNEL KEYBOARD FUNCTIONS ##########
 
-void terminal_kbdchar(char c) {
+void process_command() {
+    if (strcmp(command_buffer, "help") == 0)
+        terminal_putstr("\nAvailable commands: help, version\n");
+    else if (strcmp(command_buffer, "exit") == 0) {
+        terminal_putstr("\nBye bye...\n");
+        outw(0x604, 0x2000);
+    }
+    else if (strcmp(command_buffer, "version") == 0)
+        terminal_putstr("\nNathouOs version 0.1\n");
+    else {
+        terminal_putstr("\nUnknown command: ");
+        terminal_putstr(command_buffer);
+        terminal_putstr("\n");
+    }
+}
+
+void terminal_shell(char c) {
+    if (terminal_col == 0)
+        terminal_putstr("$> ");
     if (c == '\b') { //backspace
-        terminal_col--;
-        terminal_putchar(' ');
-        terminal_col--;
+        if (command_index > 0) {
+            command_index--;
+            command_buffer[command_index] = ' ';
+            terminal_col--;
+            terminal_putchar(' ');
+            terminal_col--;
+        }
     }
     else if (c == '\n') { // enter
+        command_buffer[command_index] = '\0';
+        process_command();
+        command_index = 0;
         terminal_row++;
         terminal_col = 0;
+        terminal_putstr("$> ");
     }
-    else {
+    else if (command_index < MAX_COMMAND_LENGTH - 1) {
+        command_buffer[command_index++] = c;
         terminal_putchar(c);
     }
 }
@@ -131,13 +161,22 @@ void keyboard_routine(void) {
     unsigned char scancode;
     char keycode;
 
+    if (terminal_row > VGA_HEIGHT) {
+        terminal_row = 0;
+        for (size_t y = 0; y < VGA_HEIGHT; y++) {
+            for (size_t x = 0; x < VGA_WIDTH; x++) {
+                const size_t index = y * VGA_WIDTH + x;
+                terminal_buffer[index] = vga_entry(' ', terminal_color);
+            }
+        }
+    }
     scancode = in_port(KEY_STATUS);
     if (scancode & 0x01) {
         keycode = in_port(KEY_PRESSED);
         if (keycode < 0)
             return;
         else {
-            terminal_kbdchar(keyboard_map[keycode]);
+            terminal_shell(keyboard_map[keycode]);
         }
     }
 }
@@ -147,6 +186,7 @@ void keyboard_routine(void) {
 void terminal_init(void) {
     terminal_row = 0;
     terminal_col = 0;
+    command_index = 0;
     terminal_color = vga_entry_color(VGA_COLOR_LIGHT_BLUE, VGA_COLOR_BLACK);
     terminal_buffer = (uint16_t*)0xB8000;
     for (size_t y = 0; y < VGA_HEIGHT; y++) {
@@ -155,12 +195,16 @@ void terminal_init(void) {
             terminal_buffer[index] = vga_entry(' ', terminal_color);
         }
     }
+    for (int i = 0; i < MAX_COMMAND_LENGTH - 1; i++)
+        command_buffer[i] = ' ';
+    command_buffer[MAX_COMMAND_LENGTH - 1] = '\0';
 }
 
 void kernel_main(void) {
     terminal_init();
-    terminal_putstr(" _   ___     \n| |_|  _|___ \n| '_|  _|_ -|\n|_,_|_| |___|\n             \n");
-    terminal_putstr("/// Welcome to NathouOs \\\\\\\n");
+    terminal_putstr(" _   ___     \n| |_|  _|___ \n| '_|  _|_ -|\n|_,_|_| |___|42\n             \n");
+    terminal_putstr("/// Welcome to NathouOs \\\\\\\n\n$> ");
+    terminal_color = vga_entry_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     while (1)
         keyboard_routine();
 } 

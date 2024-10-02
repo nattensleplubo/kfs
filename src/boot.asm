@@ -21,6 +21,13 @@ section .text
 global _start:function (_start.end - _start)
 global in_port:function (in_port.end - in_port)
 
+global outw
+outw:
+    mov dx, [esp + 4] ; port
+    mov ax, [esp + 8] ; value
+    out dx, ax
+    ret
+
 in_port:
     mov edx, [esp + 4]
     in al, dx
