@@ -30,8 +30,7 @@ void terminal_putstr(const char *str);
 void terminal_putchar(char c);
 void terminal_putentryat(char c, uint8_t color, size_t x, size_t y);
 
-// SHELL FUNCTIONS
-void start_shell(void);
+
 
 // GLOBALS
 extern unsigned int command_index;

@@ -17,7 +17,6 @@ ISO_PATH=scripts/kernhell.iso
 ASM_SOURCE=src/boot.asm \
 
 C_SOURCES=src/kernel.c \
-			src/shell.c \
 			src/keys.c \
 
 
