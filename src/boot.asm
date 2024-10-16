@@ -20,7 +20,7 @@ stack_top:
 section .text
 global _start:function (_start.end - _start)
 global in_port:function (in_port.end - in_port)
-
+global gdt_flush
 global outw
 outw:
     mov dx, [esp + 4] ; port
@@ -42,3 +42,17 @@ _start:
 .hang: hlt
     jmp .hang
 .end:
+
+gdt_flush:
+    mov eax, [esp + 4]
+    lgdt [eax]
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    jmp 0x08:.flush
+.flush:
+    ret

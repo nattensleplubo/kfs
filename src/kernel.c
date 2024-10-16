@@ -22,6 +22,9 @@ enum vga_color {
 static const size_t VGA_WIDTH = 80;
 static const size_t VGA_HEIGHT = 25;
 
+struct gdt_entry *const gdt = (struct gdt_entry *)GDT_ADDRESS;
+struct gdt_ptr gdt_ptr;
+
 size_t terminal_row;
 size_t terminal_col;
 uint8_t terminal_color;
@@ -29,6 +32,29 @@ uint16_t *terminal_buffer;
 unsigned int command_index;
 
 char command_buffer[MAX_COMMAND_LENGTH];
+
+// ########## GDT FUNCTIONS ##########
+
+void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
+    gdt[num].base_low = (base & 0xFFFF);
+    gdt[num].base_middle = (base >> 16) & 0xFF;
+    gdt[num].base_high = (base >> 24) & 0xFF;
+
+    gdt[num].limit_low = (limit & 0xFFFF);
+    gdt[num].granularity = ((limit >> 16) & 0x0F);
+
+    gdt[num].granularity |= (gran & 0xF0);
+    gdt[num].access = access;
+}
+
+void gdt_install(void) {
+    gdt_ptr.limit = (sizeof(struct gdt_entry) * GDT_ENTRIES) - 1;
+    gdt_ptr.base = GDT_ADDRESS;
+
+    gdt_set_gate(0, 0, 0, 0, 0);
+    gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF);
+    gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF);
+}
 
 // ########## LIBC DUPES ##########
 
@@ -113,6 +139,70 @@ void terminal_putstr(const char *str) {
     for (size_t i = 0; i < size; i++)
         terminal_putchar(str[i]);
 }
+
+// Printk implementation
+void printk(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    while (*format != '\0') {
+        if (*format == '%') {
+            format++;
+            if (*format == 's') {
+                char *str = va_arg(args, char *);
+                terminal_putstr(str);
+            }
+            if (*format == 'd') {
+                int     num = va_arg(args, int);
+                char    num_str[12];
+                int_to_str(num, num_str, 10);
+                terminal_putstr(num_str);
+            }
+        }
+        else {
+            terminal_putchar(*format);
+        }
+        format++;
+    }
+    va_end(args);
+}
+
+void    int_to_str(int num, char *str, int base) {
+    int i = 0;
+    int is_negative = 0;
+
+    if (num == 0) {
+        str[i++] = '0';
+        str[i] = '\0';
+        return ;
+    }
+
+    if (num < 0 && base == 10) {
+        is_negative = 1;
+        num = -num;
+    }
+
+    while (num != 0) {
+        int rem = num % base;
+        str[i++] = (rem > 9) ? (rem - 10) + 'a' : rem + '0';
+        num = num / base;
+    }
+
+    if (is_negative)
+        str[i++] = '-';
+    
+    str[i] = '\0';
+
+    int start = 0;
+    int end = i - 1;
+    while (start < end) {
+        char temp = str[start];
+        str[start] = str[end];
+        str[end] = temp;
+        start++;
+        end--;
+    }
+}
+
 // ########## KERNEL KEYBOARD FUNCTIONS ##########
 
 void process_command() {
@@ -201,6 +291,7 @@ void terminal_init(void) {
 }
 
 void kernel_main(void) {
+    gdt_install();
     terminal_init();
     terminal_putstr(" _   ___     \n| |_|  _|___ \n| '_|  _|_ -|\n|_,_|_| |___|42\n             \n");
     terminal_putstr("/// Welcome to NathouOs \\\\\\\n\n$> ");
