@@ -1,80 +1,98 @@
-NASM=nasm
-GCC=gcc
-LD=ld
-QEMU=qemu-system-i386
+# Docker settings
+DOCKER_IMAGE=kernel-builder
+DOCKER_CONTAINER=kernel-dev
+DOCKER_RUN=docker run --rm -v $(PWD):/kernel -w /kernel
 
-# Compilation flags
-NASMFLAGS=-f elf32 -g -F dwarf
-GCCFLAGS=-m32 -c -fno-builtin -fno-stack-protector -fno-omit-frame-pointer -nostdlib -nodefaultlibs -g3
-LDFLAGS=-m elf_i386 -T src/linker.ld
+# Compiler and linker settings
+ASM=nasm
+CC=gcc
+LD=ld
+
+# Compiler and assembler flags
+CFLAGS=-m32 -c -fno-builtin -fno-stack-protector -fno-omit-frame-pointer -nostdlib -nodefaultlibs -g3
+ASMFLAGS=-f elf32
+LDFLAGS=-m elf_i386 -T src/linker.ld -nostdlib
 
 # Directories
 SRC_DIR=src
-LOG_FILES_DIR=./qemudebuglogs
-ISO_PATH=scripts/kernhell.iso
+SCRIPTS_DIR=scripts
+BUILD_DIR=build
+ISO_DIR=isodir
 
-# Sources and Objects
-ASM_SOURCE=src/boot.asm \
+# Source files
+ASM_SOURCES=$(wildcard $(SRC_DIR)/*.asm)
+C_SOURCES=$(wildcard $(SRC_DIR)/*.c)
 
-C_SOURCES=src/kernel.c \
-			src/keys.c \
+# Object files
+ASM_OBJECTS=$(ASM_SOURCES:$(SRC_DIR)/%.asm=$(BUILD_DIR)/%.o)
+C_OBJECTS=$(C_SOURCES:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
+OBJECTS=$(ASM_OBJECTS) $(C_OBJECTS)
 
+# Final kernel binary
+KERNEL=$(BUILD_DIR)/kernel.bin
 
-ASM_OBJECT=$(ASM_SOURCE:.asm=.o)
-C_OBJECTS=$(C_SOURCES:.c=.o)
-KERNEL=kernel-100
+# ISO image
+ISO_IMAGE=kernel.iso
 
-QEMU_LOG_FILE=$(shell date +'%Y%m%d_%H%M%S')_qemu_debug.log
+# Default target
+all: docker-build
 
-all: $(KERNEL)
+# Create build directory
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-# Ensure logfiles directory exists
-$(LOG_FILES_DIR):
-	mkdir -p $(LOG_FILES_DIR)
+# Compile assembly files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.asm | $(BUILD_DIR)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(ASM) $(ASMFLAGS) $< -o $@
 
-# Assemble the ASM file into the object directory
-$(ASM_OBJECT): $(ASM_SOURCE) 
-	$(NASM) $(NASMFLAGS) $(ASM_SOURCE) -o $(ASM_OBJECT)
+# Compile C files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(CC) $(CFLAGS) -c $< -o $@
 
-# Compile each C source file into the directory
-%.o: %.c
-	$(GCC) $(GCCFLAGS) $< -o $@
+# Link the kernel
+$(KERNEL): $(OBJECTS)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(LD) $(LDFLAGS) $(OBJECTS) -o $@
 
-# Link the object files
-$(KERNEL): $(ASM_OBJECT) $(C_OBJECTS) $(LOG_FILES_DIR)
-	$(LD) $(LDFLAGS) -o $(KERNEL) $(ASM_OBJECT) $(C_OBJECTS)
-	cp ./$(KERNEL) ./scripts
-	docker compose -f docker-compose.yml up -d --build
+# Create ISO image
+$(ISO_IMAGE): $(KERNEL)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) /bin/bash -c "\
+		mkdir -p $(ISO_DIR)/boot/grub && \
+		cp $(KERNEL) $(ISO_DIR)/boot/ && \
+		cp $(SCRIPTS_DIR)/grub.cfg $(ISO_DIR)/boot/grub/ && \
+		grub-mkrescue -o $(ISO_IMAGE) $(ISO_DIR)"
 
+# Build Docker image
+docker-image:
+	docker build -t $(DOCKER_IMAGE) .
+
+# Build using Docker
+docker-build: docker-image $(ISO_IMAGE)
+
+# Clean build files
 clean:
-	rm -f $(ASM_OBJECT) $(C_OBJECTS) $(KERNEL)
-	rm -f ./scripts/$(KERNEL)
-	rm -rf ./scripts/isodir/ 
-	rm -rf $(LOG_FILES_DIR)
-	docker compose -f docker-compose.yml down
+	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_IMAGE)
 
-fclean: clean
-	rm -f ./scripts/kernhell.iso
-	docker system prune -af
+# Run in QEMU (with display forwarding)
+run: $(ISO_IMAGE)
+	$(DOCKER_RUN) -it \
+		--device=/dev/kvm \
+		-e DISPLAY=${DISPLAY} \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		$(DOCKER_IMAGE) \
+		qemu-system-i386 -cdrom $(ISO_IMAGE)
 
-re: fclean all
+# Debug with GDB
+debug: $(ISO_IMAGE)
+	$(DOCKER_RUN) -it \
+		--device=/dev/kvm \
+		-e DISPLAY=${DISPLAY} \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		-p 1234:1234 \
+		$(DOCKER_IMAGE) \
+		qemu-system-i386 -cdrom $(ISO_IMAGE) -s -S
 
-emulate: 
-	$(QEMU) -kernel $(KERNEL)
+# Interactive shell in Docker container
+shell:
+	$(DOCKER_RUN) -it $(DOCKER_IMAGE) /bin/bash
 
-boot:
-	$(QEMU) -cdrom $(ISO_PATH)
-
-log-emulate:
-	$(QEMU) -d int -D $(LOG_FILES_DIRECTORY)/$(QEMU_LOG_FILE) -kernel $(ISO_PATH)
-
-log-boot:
-	$(QEMU) -d int -D $(LOG_FILES_DIRECTORY)/$(QEMU_LOG_FILE) -no-reboot -cdrom $(KERNEL)
-
-debug-emulate:
-	$(QEMU) -s -S -d int -kernel $(KERNEL)
-
-debug-boot:
-	$(QEMU) -s -S -no-reboot -cdrom $(ISO_PATH)
-
-.PHONY: all clean fclean re emulate boot log-emulate log-boot debug-emulate debug-boot
+.PHONY: all clean run debug docker-image docker-build shell
