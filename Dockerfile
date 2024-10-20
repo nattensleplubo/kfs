@@ -14,13 +14,23 @@ RUN apt-get update && apt-get install -y \
     make \
     qemu-system-x86 \
     gdb \
+    # Added packages for X11 and accessibility
+    libgl1 \
+    libpulse0 \
     && rm -rf /var/lib/apt/lists/*
+
+# Create required directories and files for accessibility
+RUN mkdir -p /run/user/1000/at-spi/
 
 # Set working directory
 WORKDIR /kernel
 
 # Create non-root user
 RUN useradd -m -u 1000 builder && \
-    chown -R builder:builder /kernel
+    chown -R builder:builder /kernel /run/user/1000
 
 USER builder
+
+# Set environment variables to handle X11 and accessibility
+ENV NO_AT_BRIDGE=1
+ENV TERM=xterm
