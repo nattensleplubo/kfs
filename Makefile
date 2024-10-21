@@ -76,6 +76,13 @@ docker-build: docker-image $(ISO_IMAGE)
 clean:
 	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_IMAGE)
 
+fclean: clean
+	docker rmi -f $(DOCKER_IMAGE) 2>/dev/null || true
+	rm -rf $(ISO_DIR) $(ISO_IMAGE)
+
+# Rebuild everything from scratch
+re: fclean all
+
 # Run in QEMU (with display forwarding)
 run: $(ISO_IMAGE)
 	$(DOCKER_RUN) -it \
