@@ -1,80 +1,116 @@
+# Host system commands
+DOCKER=docker
+RM=rm -rf
+
 # Docker settings
-DOCKER_IMAGE := randomdude/gcc-cross-x86_64-elf
-DOCKER_RUN := docker run --rm -v $(CURDIR):/root/env -w /root/env $(DOCKER_IMAGE)
+DOCKER_IMAGE=kernel-builder
+DOCKER_FILE=Dockerfile
+DOCKER_CONTAINER=kernel-build-container
 
-# Directories
-SRC_DIR := src
-BUILD_DIR := build
-DIST_DIR := dist
-KERNEL_SRC := $(SRC_DIR)/impl/kernel
-X86_64_SRC := $(SRC_DIR)/impl/x86_64
-ISO_DIR := targets/x86_64/iso
+# Build commands (these will run inside docker)
+ASM=nasm
+CC=gcc
+LD=ld
 
-# Flags
-CFLAGS := -c -fno-builtin -fno-stack-protector -fno-omit-frame-pointer -nostdlib -nodefaultlibs -g3 -I $(SRC_DIR)/intf -ffreestanding
-LDFLAGS := -n -T targets/x86_64/linker.ld
-ASMFLAGS := -f elf64
+# Compiler flags as specified in the subject
+CFLAGS=-fno-builtin \
+       -fno-stack-protector \
+       -nostdlib \
+       -nodefaultlibs \
+       -m32 \
+       -I./src \
+       -Wall \
+       -Wextra \
+       -c
+
+# Assembler flags
+ASMFLAGS=-f elf32
+
+# Output directories
+BUILD_DIR=build
+ISO_DIR=iso
+BOOT_DIR=$(ISO_DIR)/boot
+GRUB_DIR=$(BOOT_DIR)/grub
 
 # Source files
-KERNEL_SRCS := $(shell find $(KERNEL_SRC) -name *.c)
-X86_64_C_SRCS := $(shell find $(X86_64_SRC) -name *.c)
-X86_64_ASM_SRCS := $(shell find $(X86_64_SRC) -name *.asm)
+ASM_SOURCES=src/boot.asm
+C_SOURCES=src/kernel.c \
+         src/keys.c
 
 # Object files
-KERNEL_OBJS := $(patsubst $(KERNEL_SRC)/%.c,$(BUILD_DIR)/kernel/%.o,$(KERNEL_SRCS))
-X86_64_C_OBJS := $(patsubst $(X86_64_SRC)/%.c,$(BUILD_DIR)/x86_64/%.o,$(X86_64_C_SRCS))
-X86_64_ASM_OBJS := $(patsubst $(X86_64_SRC)/%.asm,$(BUILD_DIR)/x86_64/%.o,$(X86_64_ASM_SRCS))
+ASM_OBJECTS=$(ASM_SOURCES:src/%.asm=$(BUILD_DIR)/%.o)
+C_OBJECTS=$(C_SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 
-# All object files
-ALL_OBJS := $(KERNEL_OBJS) $(X86_64_C_OBJS) $(X86_64_ASM_OBJS)
+# Final binary
+KERNEL_BIN=$(BOOT_DIR)/kernel.bin
 
-# Final kernel binary and ISO
-KERNEL_BIN := $(DIST_DIR)/x86_64/kernel.bin
-KERNEL_ISO := $(DIST_DIR)/x86_64/kernel.iso
+# ISO image
+ISO_IMAGE=kernel.iso
 
 # Default target
-all: $(KERNEL_ISO)
+all: build-docker
 
-# Build everything inside Docker
-build-in-docker:
-	$(DOCKER_RUN) /bin/bash -c "\
-		apt-get update && \
-		apt-get install -y nasm xorriso grub-pc-bin grub-common && \
-		make build-kernel && \
-		make build-iso \
-	"
+# Build docker image if it doesn't exist
+docker-image:
+	@if [ ! "$$($(DOCKER) images -q $(DOCKER_IMAGE) 2> /dev/null)" ]; then \
+		$(DOCKER) build -t $(DOCKER_IMAGE) -f $(DOCKER_FILE) .; \
+	fi
 
-# Build kernel
-build-kernel: $(ALL_OBJS)
-	mkdir -p $(dir $(KERNEL_BIN))
-	x86_64-elf-ld $(LDFLAGS) $(ALL_OBJS) -o $(KERNEL_BIN)
+# Run the build process inside docker
+build-docker: docker-image
+	$(DOCKER) run --rm \
+		--name $(DOCKER_CONTAINER) \
+		-v $(PWD):/kernel \
+		$(DOCKER_IMAGE) \
+		make build-kernel
 
-# Build ISO
-build-iso: $(KERNEL_BIN)
-	mkdir -p $(ISO_DIR)/boot
-	cp $< $(ISO_DIR)/boot/kernel.bin
-	grub-mkrescue /usr/lib/grub/i386-pc -o $(KERNEL_ISO) $(ISO_DIR)
+# The actual kernel build process (runs inside docker)
+build-kernel: $(ISO_IMAGE)
 
-# Rule for C files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/impl/%.c
-	mkdir -p $(@D)
-	x86_64-elf-gcc $(CFLAGS) $< -o $@
+# Create build directories
+directories:
+	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(BOOT_DIR)
+	@mkdir -p $(GRUB_DIR)
 
-# Rule for ASM files
-$(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC)/%.asm
-	mkdir -p $(@D)
-	nasm $(ASMFLAGS) $< -o $@
+# Compile assembly files
+$(BUILD_DIR)/%.o: src/%.asm
+	@mkdir -p $(dir $@)
+	$(ASM) $(ASMFLAGS) $< -o $@
 
-# Clean up
+# Compile C files
+$(BUILD_DIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $< -o $@
+
+# Link everything together
+$(KERNEL_BIN): directories $(ASM_OBJECTS) $(C_OBJECTS)
+	$(LD) -m elf_i386 -T src/linker.ld -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
+
+# Create ISO image
+$(ISO_IMAGE): $(KERNEL_BIN)
+	@cp scripts/grub.cfg $(GRUB_DIR)
+	grub-mkrescue -o $@ $(ISO_DIR)
+
+# Clean built files
 clean:
-	rm -rf $(BUILD_DIR) $(DIST_DIR)
+	$(RM) $(BUILD_DIR)
+	$(RM) $(ISO_DIR)
+	$(RM) $(ISO_IMAGE)
 
-# Phony targets
-.PHONY: all build-in-docker build-kernel build-iso clean
+# Clean everything including docker image
+fclean: clean
+	$(DOCKER) rmi -f $(DOCKER_IMAGE) 2>/dev/null || true
 
-# Main target now uses Docker
-$(KERNEL_ISO): build-in-docker
+# Clean and rebuild
+re: clean all
 
-# Debug info
-print-%:
-	@echo $* = $($*)
+# Run the kernel in QEMU (helpful for testing)
+run: all
+	qemu-system-i386 -cdrom $(ISO_IMAGE)
+
+# Debug with GDB
+debug: all
+	qemu-system-i386 -cdrom $(ISO_IMAGE) -s -S
+
+.PHONY: all clean fclean re run debug directories docker-image build-docker build-kernel
